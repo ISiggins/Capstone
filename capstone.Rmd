@@ -1,0 +1,330 @@
+---
+title: "Capstone"
+author: "Ian Siggins"
+date: "2024-04-28"
+output: word_document
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+
+library(readxl)
+library(tidyverse)
+library(ggplot2)
+library(plotly)
+library(dplyr)
+library(zoo)
+library(shiny)
+library(forecast)
+
+#Import the dataset
+
+df <-read_excel("final dataset.xlsx")
+
+# Format
+# Combine 'YEAR' and 'Month' into a single Date column
+df$Date <- as.Date(paste(df$YEAR, df$Month, "01", sep = "-"))
+
+
+```
+
+
+
+```{r tabsets, echo=FALSE}
+
+
+# Load required libraries
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(shiny)
+library(forecast)  # For time series forecasting
+library(DT)  # For interactive DataTables
+
+# Read data from Excel file
+df <- read_excel("final dataset.xlsx")
+
+# Check if required columns exist in the dataframe
+required_columns <- c("YEAR", "Month", "Product", "Value", "Country")
+missing_columns <- setdiff(required_columns, colnames(df))
+
+if (length(missing_columns) > 0) {
+  stop(paste("Required column(s) missing:", paste(missing_columns, collapse = ", ")))
+}
+
+# Convert 'YEAR' and 'Month' to Date format
+df$Date <- as.Date(paste(df$YEAR, df$Month, "01", sep = "-"))
+
+# Define the UI for the application
+ui <- fluidPage(
+  titlePanel("Data Visualization and Forecasting"),
+  sidebarLayout(
+    sidebarPanel(
+      selectInput("plot_type", "Select Plot Type:", 
+                  choices = c("Time Series Plot", "Heatmap", "Bar Chart")),
+      selectizeInput("product", "Select Product(s):", 
+                     choices = c("Select All", unique(df$Product)), multiple = TRUE),
+      selectizeInput("country", "Select Countries:", 
+                     choices = c("Select All", unique(df$Country)), multiple = TRUE),
+      selectInput("forecast_years", "Select Forecast Horizon (Months):",
+                  choices = c("6 Months" = 6, "1 Year" = 12, "1.5 Years" = 18, "3 Years" = 36)),
+      checkboxInput("perform_forecast", "Perform Forecast", value = FALSE),
+      checkboxInput("show_trendline", "Show Trendline", value = TRUE)  # Checkbox for trendline option
+    ),
+    mainPanel(
+      plotOutput("plot"),
+      verbatimTextOutput("forecast_summary")  # Output for forecast summary
+    )
+  )
+)
+
+# Define the server logic
+server <- function(input, output) {
+  
+  # Reactive function to filter data based on input
+  filtered_data <- reactive({
+    df_filtered <- df
+    
+    # Filter by product
+    if (!is.null(input$product) && "Select All" %in% input$product) {
+      df_filtered <- df_filtered
+    } else if (!is.null(input$product)) {
+      df_filtered <- df_filtered[df_filtered$Product %in% input$product, ]
+    }
+    
+    # Filter by country
+    if (!is.null(input$country) && "Select All" %in% input$country) {
+      df_filtered <- df_filtered
+    } else if (!is.null(input$country)) {
+      df_filtered <- df_filtered[df_filtered$Country %in% input$country, ]
+    }
+    
+    return(df_filtered)
+  })
+  
+  # Reactive function to perform forecast and generate plot
+  output$plot <- renderPlot({
+    data <- filtered_data()
+    
+    if (input$plot_type == "Time Series Plot") {
+      gg <- ggplot(data, aes(x = Date, y = Value, color = Country)) +
+        geom_line()
+      
+      if (input$show_trendline) {
+        gg <- gg + geom_smooth(method = "lm", se = FALSE)
+      }
+      
+      gg <- gg + labs(title = "Time Series Plot",
+                      x = "Date",
+                      y = "Energy Produced (GWh)",
+                      color = "Country") +
+        theme_minimal()
+      
+      print(gg)
+      
+    } else if (input$plot_type == "Heatmap") {
+      gg <- ggplot(data, aes(x = Country, y = Date, fill = Value)) +
+        geom_tile() +
+        labs(title = "Heatmap",
+             x = "Country",
+             y = "Date",
+             fill = "Energy Produced (GWh)") +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+      
+      print(gg)
+      
+    } else if (input$plot_type == "Bar Chart") {
+      gg <- ggplot(data, aes(x = Country, y = Value/1e6, fill = as.factor(YEAR))) +
+        geom_bar(stat = "identity") +
+        labs(title = "Bar Chart",
+             x = "Country",
+             y = "Energy Produced (GWh)",
+             fill = "Year") +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+      
+      print(gg)
+    }
+    
+    # Perform forecast if the checkbox for forecast is checked
+    if (input$perform_forecast) {
+      if (!is.null(input$product) && length(input$product) > 0 &&
+          !is.null(input$country) && length(input$country) > 0) {
+        
+        # Filter data for selected product and countries
+        filtered_data <- data %>%
+          filter(Product %in% input$product, Country %in% input$country)
+        
+        # Create time series data
+        ts_data <- ts(filtered_data$Value, frequency = 12)
+        
+        # Perform forecast based on selected horizon (in months)
+        forecast_horizon <- as.numeric(input$forecast_years)  # Forecast horizon in months
+        forecast_result <- forecast(auto.arima(ts_data), h = forecast_horizon)
+        
+        # Plot the forecast
+        plot(forecast_result, main = "Forecast Plot", xlab = "Time", ylab = "Energy Produced (GWh)")
+        
+        # Return the summary of the forecast model
+        return(summary(forecast_result))
+      }
+    }
+  })
+  
+  # Render the forecast summary
+  output$forecast_summary <- renderPrint({
+    if (input$perform_forecast) {
+      if (!is.null(input$product) && length(input$product) > 0 &&
+          !is.null(input$country) && length(input$country) > 0) {
+        # Display the summary of the forecast model
+        summary(forecast(auto.arima(ts(filtered_data()$Value, frequency = 12)), h = as.numeric(input$forecast_years)))
+      }
+    }
+  })
+}
+
+# Run the application
+shinyApp(ui = ui, server = server)
+
+```
+
+
+
+
+
+
+
+
+```{r}
+
+
+
+#### TABLE 1 "Low and High Products" for each country ####
+# Load required libraries
+library(readxl)
+library(dplyr)
+library(DT)  # For interactive DataTables
+
+# Read data from Excel file
+df <- read_excel("final dataset.xlsx")
+
+# Check if required columns exist in the dataframe
+required_columns <- c("YEAR", "Month", "Product", "Value", "Country")
+missing_columns <- setdiff(required_columns, colnames(df))
+
+if (length(missing_columns) > 0) {
+  stop(paste("Required column(s) missing:", paste(missing_columns, collapse = ", ")))
+}
+
+# Convert 'YEAR' and 'Month' to Date format
+df$Date <- as.Date(paste(df$YEAR, df$Month, "01", sep = "-"))
+
+# Function to find low and high products by timeframe
+find_low_high <- function(data, timeframe_col) {
+  grouped_data <- data %>%
+    group_by(Country, YEAR, !!enquo(timeframe_col)) %>%
+    summarise(
+      Year = first(YEAR),
+      Min_Production = min(Value),
+      Max_Production = max(Value),
+      Product_Min = first(Product[Value == Min_Production]),
+      Product_Max = first(Product[Value == Max_Production])
+    ) %>%
+    ungroup()
+  return(grouped_data)
+}
+
+# Find monthly low and high products
+monthly_extremes <- find_low_high(df, Month)
+
+# Function to render DataTables
+render_datatable <- function(data, title) {
+  datatable(
+    data,
+    rownames = FALSE,
+    options = list(
+      dom = 'Bfrtip',
+      buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+      searching = TRUE,
+      pageLength = 10
+    ),
+    caption = title
+  )
+}
+
+# UI definition
+ui <- fluidPage(
+  titlePanel("Monthly Extremes"),
+  DT::dataTableOutput("monthly_table")  # Display the Monthly Extremes DataTable
+)
+
+# Server logic
+server <- function(input, output) {
+  # Render Monthly Extremes DataTable
+  output$monthly_table <- DT::renderDataTable({
+    render_datatable(monthly_extremes, "Low and High Products")
+  })
+}
+
+# Run the application
+shinyApp(ui = ui, server = server)
+
+```
+
+```{r}
+##### TABLE 2 total for each product for each year####
+
+
+# Load required libraries
+library(shiny)
+library(DT)
+library(dplyr)
+
+# Sample dataframe (replace with your actual data)
+df <-read_excel("final dataset.xlsx")
+
+# UI definition
+ui <- fluidPage(
+  titlePanel("Product Summary Table"),
+  DT::dataTableOutput("table")  # Display the DataTable
+)
+
+# Server logic
+server <- function(input, output) {
+  # Function to summarize data
+  product_summary <- reactive({
+    df %>%
+      group_by(Product, Country, YEAR) %>%
+      summarise(Total_Value = sum(Value)) %>%
+      ungroup()
+  })
+  
+  # Render DataTable
+  output$table <- DT::renderDataTable({
+    datatable(product_summary(),
+              options = list(pageLength = 10, searching = TRUE),
+              rownames = FALSE,
+              class = 'cell-border stripe compact',
+              extensions = 'Buttons',
+              selection = 'none',
+              style = 'bootstrap',
+              filter = 'top')
+  })
+}
+
+# Run the application
+shinyApp(ui = ui, server = server)
+
+
+
+
+
+```
+
+
+
+
+
+
+
